@@ -33,7 +33,7 @@ class MainWindow(QWidget):
     SERIALBAUDRATE = 9600
 
     baseID = int('B001', 16)
-    totalIC = 2 #make this configurable later
+    totalIC = 2 
     totalCells = 14
 
     unformattedData = None
@@ -58,7 +58,7 @@ class MainWindow(QWidget):
 
         tabNames = ["Battery Profile",
                     "Charging/Config",
-                    "Live Text Data",
+                    "Live CAN Data",
                     "Live Graph/Data Logging",
                     "Live Cell Data",
                     "Diagnostic Trouble Codes"]
@@ -72,7 +72,8 @@ class MainWindow(QWidget):
 
             self.tabSystem.addTab(self.tabs[tabNames.index(i)], i)
 
-
+        # Connects the clicking of the tabs to self.tabIndex, 
+        # this is the start of the process of updating the live CAN data
         self.tabSystem.tabBarClicked.connect(self.tabIndex)
 
         '''
@@ -112,110 +113,18 @@ class MainWindow(QWidget):
         event.accept()
 
 
-    def updateLiveTextData(self):
-        
-        if not self.candapter:
-            return
-
-        messages = readCANbusToFile(self.candapter,[0x64C,0x6B0,0x6B1,0x6B2])
-
-        if messages:
-            for i, msg in enumerate(messages[:min(len(messages), self.dataTable.rowCount())]):
-                dataStr = (''.join([f"{b:02X}" for b in msg.data]),msg.arbitration_id)
-                
-                #print(dataStr[1])
-
-                match dataStr[1]:
-                    case 0x64C:
-                        #print(dataStr[0])
-                        pass
-
-                    case 0x6B0:
-                        self.dataTable.setItem(0, 1, QTableWidgetItem( str(int(dataStr[0][8:10], 16) / 2)))
-                        
-                        self.dataTable.setItem(7, 1, QTableWidgetItem( str(int(dataStr[0][0:2], 16))))
-                        
-                    case 0x6B1:
-                        self.dataTable.setItem(1, 1, QTableWidgetItem( str(int(dataStr[0][2:4], 16))))
-
-                        #self.dataTable.setItem(5, 1, QTableWidgetItem( str(int(dataStr[0][8:10], 16))))
-
-                        #self.dataTable.setItem(6, 1, QTableWidgetItem( str(int(dataStr[0][10:12], 16))))
-                        
-                    case 0x6B2:
-                        self.dataTable.setItem(3, 1, QTableWidgetItem( str(int(dataStr[0][4:6], 16) / 10)))
-                        
-                        self.dataTable.setItem(4, 1, QTableWidgetItem( str(int(dataStr[0][0:2], 16) / 10)))
-
-                    case _:
-                        print(f"How'd we get here?\n{dataStr[1]}")
-
-
-    def updateTraffic(self):
-
-        global fakeCan
-        
-    
-        if not self.candapter:
-            print("setting placeholder data")
-
-            for i in fakeCan.keys():
-                
-                self.busTraffic.setRowCount(len(fakeCan.keys()))
-
-                self.busTraffic.setItem(list(fakeCan.keys()).index(i), 0, QTableWidgetItem( str(i) ))
-                #self.busTraffic.setItem(list(fakeCan.keys()).index(i), 1, QTableWidgetItem( str() ))
-
-                for j in range(8):
-                    self.busTraffic.setItem(list(fakeCan.keys()).index(i), j+2, QTableWidgetItem( str(fakeCan[i][0][j]) ))
-
-                self.busTraffic.setItem(list(fakeCan.keys()).index(i), 10, QTableWidgetItem( str() ))
-                self.busTraffic.setItem(list(fakeCan.keys()).index(i), 11, QTableWidgetItem( str(fakeCan[i][1]) ))
-
-            self.busTraffic.resizeColumnsToContents()
-            self.busTraffic.repaint()
-
-            return
-
-
-        messages = readCANbusToFile(self.candapter)
-
-        canMessages = {}
-
-        if messages:
-            for i, msg in enumerate(messages[:min(len(messages), self.dataTable.rowCount())]):
-                dataStr = [hex(msg.arbitration_id), (' '.join([f"{b:02X}" for b in msg.data])).split(), msg.timestamp]
-
-                canMessages[dataStr[0]] = (dataStr[1],dataStr[2])
-
-            for i in canMessages.keys():
-
-                self.busTraffic.setRowCount(len(canMessages.keys()))
-
-
-                self.busTraffic.setItem(list(canMessages.keys()).index(i), 0, QTableWidgetItem( str(i) ))
-                self.busTraffic.setItem(list(canMessages.keys()).index(i), 1, QTableWidgetItem( str() ))
-
-
-
-                
-                for j in range(8):
-
-                    print(str(canMessages[i][0][j]))
-
-                    self.busTraffic.setItem(list(canMessages.keys()).index(i), j+2, QTableWidgetItem( str(canMessages[i][0][j]) ))
-                
-                self.busTraffic.setItem(list(canMessages.keys()).index(i), 10, QTableWidgetItem( str() ))
-                self.busTraffic.setItem(list(canMessages.keys()).index(i), 11, QTableWidgetItem( str(canMessages[i][1]) ))
-
-        self.busTraffic.repaint()
-
-
     def startWorker(self):
+        # starts the worker on a background thread getting data from CAN
+
         if self.worker and self.worker.isRunning():
             return  # already running
         self.worker = CANWorker(self.candapter)
-        self.worker.decodedDataReady.connect(self.onDataReady)
+
+        # when the decoded data is ready send it to onDataReady for processing
+        self.worker.decodedDataReady.connect(self.onBatteryVoltageReady)
+
+        self.worker.rawDataReady.connect(self.onRAWCANReady)
+
         self.worker.error.connect(lambda e: print(f"[ERROR] {e}"))
         self.worker.start()
 
@@ -226,77 +135,42 @@ class MainWindow(QWidget):
 
 
     def tabIndex(self, index):
+        # Makes the local index global for use later
+        # and checks if the user is in a tab that requires live data
+
         global currentIndex
         currentIndex = index
 
-        if index == 4 and self.candapter:  # only on Live Cell Data tab
+        if index in [2, 4] and self.candapter:  # only on Live Cell Data tab
             self.startWorker()
         else:
             self.stopWorker()
 
-    '''
-    def onDataReady(self, ic):
-        print(f"onDataReady called, ic length: {len(ic) if ic else None}")
+    def onRAWCANReady(self, raw):
+
+        if raw is None:
+            print("[WARN] No data received")
+            return
+
+        try:
+            self.genericCANTable.setItem(0, 0, QTableWidgetItem(str(raw)))
+
+            
+            self.genericCANTable.viewport().update()
+
+        except (IndexError, TypeError, KeyError) as e:
+            print(f"[ERROR] onGenericCANReady failed: {e}")
+
+    def onBatteryVoltageReady(self, ic):
+        # formats the data from the CAN bus and puts it on the frontend
+
+        if ic is None:
+            print("[WARN] No data received")
+            return
         
-        if ic is None:
-            print("[WARN] No data received")
-            return
-
         try:
             for i in range(0, int((bmsValueTransfer.TOTAL_AD68 / 2) + 1)):
-                for row, (ic_dict, cells) in enumerate(ic):
-                    ic_val = f"{ic_dict['v_segment_V']:.3f}" if ic_dict.get('type') == 'ic_status' else "N/A"
-                    print(f"Setting row {row}, col 0 to {ic_val}")
-                    self.cellDataArray[i].setItem(row, 0, QTableWidgetItem(ic_val))
-
-                    for col, cell in enumerate(cells, start=1):
-                        if cell.get('type') == 'cell':
-                            cell_val = f"{cell['voltage_V']:.3f}"
-                        else:
-                            cell_val = "N/A"
-                        print(f"Setting row {row}, col {col} to {cell_val}")
-                        self.cellDataArray[i].setItem(row, col, QTableWidgetItem(cell_val))
-
-                print(f"Table rows: {self.cellDataArray[i].rowCount()}, cols: {self.cellDataArray[0].columnCount()}")
-                self.cellDataArray[i].viewport().update()
-
-        except (IndexError, TypeError, KeyError) as e:
-            print(f"[ERROR] onDataReady failed: {e}")
-    '''
-    '''
-    def onDataReady(self, ic):
-        if ic is None:
-            print("[WARN] No data received")
-            return
-        try:
-            for i in range(0, int((bmsValueTransfer.TOTAL_AD68 / 2) + 1)):
-                
-                for row, (ic_dict, cells) in enumerate(ic):
-                    
-                    # Only update IC column if we got a valid ic_status
-                    if ic_dict.get('type') == 'ic_status':
-                        ic_val = f"{ic_dict['v_segment_V']:.3f}"
-                        self.cellDataArray[i].setItem(row, 0, QTableWidgetItem(ic_val))
-
-                    # Only update cell columns if we got valid cell data
-                    for col, cell in enumerate(cells, start=1):
-                        if cell.get('type') == 'cell':
-                            cell_val = f"{cell['voltage_V']:.3f}"
-                            self.cellDataArray[i].setItem(row, col, QTableWidgetItem(cell_val))
-
-                self.cellDataArray[i].viewport().update()
-
-        except (IndexError, TypeError, KeyError) as e:
-            print(f"[ERROR] onDataReady failed: {e}")
-    '''
-
-    def onDataReady(self, ic):
-        if ic is None:
-            print("[WARN] No data received")
-            return
-        try:
-            for i in range(0, int((bmsValueTransfer.TOTAL_AD68 / 2) + 1)):
-                ic_dict, cells = ic[i]  # directly index, no slice needed
+                ic_dict, cells = ic[i]
 
                 if ic_dict.get('type') == 'ic_status':
                     ic_val = f"{ic_dict['v_segment_V']:.3f}"
@@ -310,7 +184,7 @@ class MainWindow(QWidget):
                 self.cellDataArray[i].viewport().update()
 
         except (IndexError, TypeError, KeyError) as e:
-            print(f"[ERROR] onDataReady failed: {e}")
+            print(f"[ERROR] onBatteryVoltageReady failed: {e}")
 
 
     def makeGraph(self):
@@ -454,9 +328,9 @@ class MainWindow(QWidget):
         baudSelect.addItems(baudRates)
 
         items = {
-            baudRates[0]: 125_000, 
-            baudRates[1]: 250_000, 
-            baudRates[2]: 500_000, 
+            baudRates[0]: 125_000,
+            baudRates[1]: 250_000,
+            baudRates[2]: 500_000,
             baudRates[3]: 1_000_000
         }
 
@@ -805,50 +679,69 @@ class MainWindow(QWidget):
 
         self.index = 2
 
-        parameterUnit = [
-                        ("Pack State of Charge (SOC)","%"),            # 
-                        ("Pack Discharge Current Limit (DCL)","A"),    # 
-                        ("Pack Charge Current Limit (CCL)","A"),       # 
-                        ("Lowest Cell Voltage","V"),                   # 
-                        ("Highest Cell Voltage","V"),                  # 
-                        ("Highest Battery Temp","C"),                  # 
-                        ("Lowest Battery Temp","C"),                   # 
-                        ("Pack Amperage (Current)","A"),               # 
-                        ("Average Pack Amperage","A"),                 # 
-                        ("Pack Voltage","V"),                          # 
-                        ("Power Supply (lower than actual)","V"),      # 
-                        ("Always-On Power Status",""),                 # 
-                        ("Is-Ready Power Status",""),                  # 
-                        ("Is-Charging Power Status",""),               # 
-                        ("Charge-Enabled Output Active",""),           # 
-                        ("Discharge-Enabled Output Active",""),        # 
-                        ("Errors Present",""),                         # 
-                        ("Is Pack Balancing",""),                      # 
-                        ("Time Since Power-On","Sec"),                 # 
-                        ("Time Since Faults Cleared","Min")            # 
-                        ]
+        self.genericCANTable = QTableWidget()
 
-        self.dataTable = QTableWidget()
+        def formatSendData(stringToFormat):
+            canData = []
 
-        self.dataTable.setColumnCount(3)
+            splitString = stringToFormat.split()
 
-        self.dataTable.setRowCount(20)
+            for i in splitString:
+                canData.append(int(i))
 
-        self.dataTable.setHorizontalHeaderLabels(["Parameter","Value","Unit"])
+            return canData
 
-        self.dataTable.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tabTwoLayout.addWidget(QLabel("ID: "),0,0)
+        idTextbox = TextEditLE()
+        self.tabTwoLayout.addWidget(idTextbox, 0, 1)
 
-        self.dataTable.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self.tabTwoLayout.addWidget(QLabel("Message: "),0,2)
+        messageTextbox = TextEditLE()
+        messageTextbox.setPlaceholderText("Separate values via a space")
+        self.tabTwoLayout.addWidget(messageTextbox, 0, 3)
 
-        for i, (name, unit) in enumerate(parameterUnit):
-            itemName = QTableWidgetItem(name)
-            itemUnit = QTableWidgetItem(unit)
-            self.dataTable.setItem(i, 0, itemName)
-            self.dataTable.setItem(i, 2, itemUnit)
 
-        self.dataTable.resizeColumnsToContents()
+        sendMessagebutton = PushButtonLE("Send Message")
 
-        self.tabTwoLayout.addWidget(self.dataTable,1,0)
+        #sendMessagebutton.clicked.connect(lambda _: sendToCANbus(self.candapter, int(idTextbox.toPlainText()), formatSendData(messageTextbox.toPlainText()), True))
+        def sendFromTab(*_):
+            try:
+                canID = int(idTextbox.toPlainText().strip(), 0)   # accepts 291 or 0x123
+                sendToCANbus(self.candapter, canID,
+                            formatSendData(messageTextbox.toPlainText()),
+                            canID > 0x7FF)                       # standard if it fits in 11 bits
+            except Exception as e:
+                QMessageBox.critical(self, "CAN Error", str(e))
+
+        sendMessagebutton.clicked.connect(sendFromTab)
+
+        self.tabTwoLayout.addWidget(sendMessagebutton, 0, 4)
+
+
+        self.genericCANTable.setColumnCount(13)
+
+        self.genericCANTable.setRowCount(2)
+
+        self.genericCANTable.setHorizontalHeaderLabels([
+            "ID",
+            "Length",
+            "Byte0",
+            "Byte0",
+            "Byte1",
+            "Byte2",
+            "Byte3",
+            "Byte4",
+            "Byte5",
+            "Byte6",
+            "Byte7",
+            "Count",
+            "Timestamp"
+            ])
+
+        
+        self.genericCANTable.resizeColumnsToContents()
+
+        self.tabTwoLayout.addWidget(self.genericCANTable,1, 0, 1, 5)
 
         return self.tabTwoLayout
 
