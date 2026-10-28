@@ -308,6 +308,7 @@ class MainWindow(QWidget):
         self.tabZeroLayout = QGridLayout()
 
         self.index = 0
+        self.candapter = None
 
         comSelect = QComboBox()
 
@@ -344,13 +345,21 @@ class MainWindow(QWidget):
         cellsbox = TextEditLE()
         cellsbox.setPlainText("14")
 
+        # Widgets that shouldn't be changed while connected
+        lockableWidgets = [comSelect, refreshButton, baudSelect, ad68box, cellsbox]
+
+        def setConnectedUI(connected):
+            connectButton.setText("Disconnect" if connected else "Connect")
+            for w in lockableWidgets:
+                w.setEnabled(not connected)
+
         def connectToCAN():
             self.comPort = comSelect.currentText()
             self.canBaud = items.get(baudSelect.currentText())
             self.SERIALBAUDRATE = 9600
 
-            try:   
-                bmsValueTransfer.convertAndSetValues( ad68box.toPlainText() , cellsbox.toPlainText() )
+            try:
+                bmsValueTransfer.convertAndSetValues(ad68box.toPlainText(), cellsbox.toPlainText())
 
                 self.rebuildTabFour()
                 self.tabFourLayout.update()
@@ -364,25 +373,44 @@ class MainWindow(QWidget):
                 self.candapter = None
 
             else:
+                setConnectedUI(True)
                 QMessageBox.information(self, "Success", "Successfully connected to the CAN bus.")
 
+        def disconnectFromCAN():
+            try:
+                if self.candapter is not None:
+                    self.candapter.closeCANBus()
+                    print("Disconnected from CAN bus.")
+            except Exception as e:
+                QMessageBox.critical(self, "Disconnect Error", str(e))
+            else:
+                QMessageBox.information(self, "Success", "Successfully disconnected from the CAN bus.")
+            finally:
+                self.candapter = None
+                setConnectedUI(False)
 
-        connectButton.clicked.connect(connectToCAN)
+        def toggleConnection():
+            if self.candapter is None:
+                connectToCAN()
+            else:
+                disconnectFromCAN()
 
-        self.tabZeroLayout.addWidget(QLabel("COM Number: "),0,0)
-        self.tabZeroLayout.addWidget(comSelect,0,1)
-        self.tabZeroLayout.addWidget(refreshButton,0,2)
+        connectButton.clicked.connect(toggleConnection)
 
-        self.tabZeroLayout.addWidget(QLabel("Baudrate: "),1,0)
-        self.tabZeroLayout.addWidget(baudSelect,1,1)
+        self.tabZeroLayout.addWidget(QLabel("COM Number: "), 0, 0)
+        self.tabZeroLayout.addWidget(comSelect, 0, 1)
+        self.tabZeroLayout.addWidget(refreshButton, 0, 2)
 
-        self.tabZeroLayout.addWidget(QLabel("Number of AD68: "),2,0)
-        self.tabZeroLayout.addWidget(ad68box,2,1)
+        self.tabZeroLayout.addWidget(QLabel("Baudrate: "), 1, 0)
+        self.tabZeroLayout.addWidget(baudSelect, 1, 1)
 
-        self.tabZeroLayout.addWidget(QLabel("Number of Cells: "),4,0)
-        self.tabZeroLayout.addWidget(cellsbox,4,1)
+        self.tabZeroLayout.addWidget(QLabel("Number of AD68: "), 2, 0)
+        self.tabZeroLayout.addWidget(ad68box, 2, 1)
 
-        self.tabZeroLayout.addWidget(connectButton,5,0,1,3)
+        self.tabZeroLayout.addWidget(QLabel("Number of Cells: "), 4, 0)
+        self.tabZeroLayout.addWidget(cellsbox, 4, 1)
+
+        self.tabZeroLayout.addWidget(connectButton, 5, 0, 1, 3)
 
         return self.tabZeroLayout
 
