@@ -464,12 +464,14 @@ class MainWindow(QWidget):
                         canData = [0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] # Charge on
                         print("Charging")
                         userFriendlyMessage = "Charging enabled"
+                        self.radioChargeButton.setText("Stop Charging")
 
                     else:
                         canData = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] # Charge off
                         print("NOT Charging")
                         userFriendlyMessage = "Charging disabled"
-                    
+                        self.radioChargeButton.setText("Start Charging")
+
                 case -3:
                     self.isBalancing = (not self.isBalancing)
 
@@ -477,11 +479,13 @@ class MainWindow(QWidget):
                         canData = [0x0D, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] # Balance on
                         print("Balancing")
                         userFriendlyMessage = "Balancing enabled"
+                        self.radioBalanceButton.setText("Stop Balancing")
 
                     else:
                         canData = [0x0D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] # Balance off
                         print("NOT Balancing")
                         userFriendlyMessage = "Balancing disabled"
+                        self.radioBalanceButton.setText("Start Balancing")
                         
                 case -4:
                     try:
@@ -539,6 +543,14 @@ class MainWindow(QWidget):
                     sendToCANbus(candapter, canID, canData, True)
 
                 except Exception as e:
+                    # Revert state and label since the message never went out
+                    if currentRadio == -2:
+                        self.isCharging = not self.isCharging
+                        self.radioChargeButton.setText("Stop Charging" if self.isCharging else "Start Charging")
+                    elif currentRadio == -3:
+                        self.isBalancing = not self.isBalancing
+                        self.radioBalanceButton.setText("Stop Balancing" if self.isBalancing else "Start Balancing")
+
                     QMessageBox.critical(self, "CAN Error", str(e))
 
                 else:
@@ -567,10 +579,10 @@ class MainWindow(QWidget):
 
 
 
-        self.radioChargeButton = QRadioButton("Charge")
+        self.radioChargeButton = QRadioButton("Start Charging")
         self.radioChargeButton.clicked.connect(lambda: removeCheckmarks(self.checkboxes))
 
-        self.radioBalanceButton = QRadioButton("Balance")
+        self.radioBalanceButton = QRadioButton("Start Balancing")
         self.radioBalanceButton.clicked.connect(lambda: removeCheckmarks(self.checkboxes))
 
         self.radioConfigButton = QRadioButton("Config")
