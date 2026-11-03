@@ -141,7 +141,7 @@ class MainWindow(QWidget):
         global currentIndex
         currentIndex = index
 
-        if index in [2, 4] and self.candapter:  # only on Live Cell Data tab
+        if index != 0 and self.candapter:
             self.startWorker()
         else:
             self.stopWorker()
@@ -766,7 +766,6 @@ class MainWindow(QWidget):
             "ID",
             "Length",
             "Byte0",
-            "Byte0",
             "Byte1",
             "Byte2",
             "Byte3",
@@ -1034,9 +1033,9 @@ if __name__ == "__main__":
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 
         try:
-            import pyi_splash
-            pyi_splash.update_text("Loading...")
-            pyi_splash.close()
+            import pyi_splash, birthdays
+            pyi_splash.update_text(birthdays.returnBirthdays() + "\nLoading...")
+            
         except ImportError:
             pass  # Not running from a PyInstaller bundle
         
@@ -1051,5 +1050,7 @@ if __name__ == "__main__":
     window = MainWindow()
     
     window.showMaximized()
+
+    pyi_splash.close()
 
     sys.exit(app.exec())

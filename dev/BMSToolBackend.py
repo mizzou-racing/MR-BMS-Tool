@@ -110,16 +110,8 @@ def rawCANMessage(candapter,msgLen):
 
 
 def formatCANMessage(candapter,msgLen):
-    messages = readCANbusToFile(candapter, msgLen)
 
-    formatted = [
-        {
-            "id": f"0x{msg.arbitration_id:X}",
-            "data": [f"{byte:02X}" for byte in msg.data],
-            "timestamp": msg.timestamp
-        }
-        for msg in messages
-    ]
+    formatted = rawCANMessage(candapter,msgLen)
 
 
     #candapter.closeCANBus()    
