@@ -331,6 +331,8 @@ def backendMain(comPort, canbaudrate, serialbaudrate, msgLen):
 # B000 + 7 * 14 + ic (ic should be looped through)
 
 
+
+
 if __name__ == "__main__":
     formatted_CANData = backendMain("COM3", 1_000_000, 9600, 29)
 

@@ -22,7 +22,7 @@ class CANWorker(QThread):
 
                 decodedIC = decode_formatted_data(ic)
 
-                rawCAN = formatCANMessage(self.candapter, self.msgLen)
+                rawCAN = rawCANMessage(self.candapter, self.msgLen)
 
                 self.formattedDataReady.emit(ic)
                 self.decodedDataReady.emit(decodedIC)

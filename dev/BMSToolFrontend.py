@@ -15,6 +15,8 @@ import pyqtgraph.exporters
 
 currentIndex = 0
 
+
+# this is just used for testing the graph, if its still here after the graph reads from can it means I forgot to remvoe it
 fakeCan = {'0xc0': (['00', '00', '00', '00', '01', '00', '00', '00'], 
                     1763154300.3749294), 
             '0xa1': (['26', '01', 'B8', '0B', 'B8', '0B', '18', '02'], 
@@ -28,15 +30,21 @@ fakeCan = {'0xc0': (['00', '00', '00', '00', '01', '00', '00', '00'],
 class MainWindow(QWidget):
     # This class' main purpose is to draw the main window and its associated functionality
 
+    # Comport is set to an impossible value so we can autodetect later
     comPort = 'COM-1'
-    canBaud = 0
-    SERIALBAUDRATE = 9600
 
+    #baud is set on the frontend
+    canBaud = 0
+
+    #hardcoded because I found no way to change it.
+    SERIALBAUDRATE = 9600
+    # The three above values are all to ensure the candapter can connect to the BMS
+
+    # Base can ID is B001, this converts that to an int
     baseID = int('B001', 16)
+    #below are default values, they can be configured on the front end
     totalIC = 2 
     totalCells = 14
-
-    unformattedData = None
     
     def __init__(self):
         # general initilization. Draws what the program looks like before you create or load a file
@@ -54,6 +62,8 @@ class MainWindow(QWidget):
 
         self.candapter = None     # reference to the connected CAN adapter
         self.worker = None
+
+        self.canRowMap = {}
 
 
         tabNames = ["Battery Profile",
@@ -91,7 +101,7 @@ class MainWindow(QWidget):
                          [self.tabs.index(i)])
         '''
 
-
+    
         self.tabs[0].setLayout(self.makeTabZero())
         self.tabs[1].setLayout(self.makeTabOne())
         self.tabs[2].setLayout(self.makeTabTwo())
@@ -107,6 +117,7 @@ class MainWindow(QWidget):
 
 
     def closeEvent(self, event):
+        # stops the worker and closes the CAN bus
         self.stopWorker()
         if self.candapter:
             self.candapter.closeCANBus()
@@ -123,12 +134,14 @@ class MainWindow(QWidget):
         # when the decoded data is ready send it to onDataReady for processing
         self.worker.decodedDataReady.connect(self.onBatteryVoltageReady)
 
+        # same thing but for raw data
         self.worker.rawDataReady.connect(self.onRAWCANReady)
 
         self.worker.error.connect(lambda e: print(f"[ERROR] {e}"))
         self.worker.start()
 
     def stopWorker(self):
+        # Safely stops the worker
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
             self.worker.quit()
@@ -147,19 +160,38 @@ class MainWindow(QWidget):
             self.stopWorker()
 
     def onRAWCANReady(self, raw):
-
         if raw is None:
             print("[WARN] No data received")
             return
 
         try:
-            self.genericCANTable.setItem(0, 0, QTableWidgetItem(str(raw)))
+            self.genericCANTable.setUpdatesEnabled(False)  # avoid flicker while updating
 
-            
-            self.genericCANTable.viewport().update()
+            for msg in raw:
+                can_id = msg['id']
+
+                # New ID -> append a row and remember it
+                if can_id not in self.canRowMap:
+                    row = self.genericCANTable.rowCount()
+                    self.genericCANTable.insertRow(row)
+                    self.canRowMap[can_id] = row
+                    self.genericCANTable.setItem(row, 0, QTableWidgetItem(str(can_id)))
+                    self.genericCANTable.setItem(row, 1, QTableWidgetItem(str(len(msg['data']))))
+                else:
+                    row = self.canRowMap[can_id]
+
+                # Update the data bytes for that row
+                for j, byte in enumerate(msg['data']):
+                    self.genericCANTable.setItem(row, 2 + j, QTableWidgetItem(str(byte)))
+
+                # Update timestamp
+                self.genericCANTable.setItem(row, 11, QTableWidgetItem(str(msg['timestamp'])))
 
         except (IndexError, TypeError, KeyError) as e:
-            print(f"[ERROR] onGenericCANReady failed: {e}")
+            print(f"[ERROR] onRAWCANReady failed: {e}")
+
+        finally:
+            self.genericCANTable.setUpdatesEnabled(True)
 
     def onBatteryVoltageReady(self, ic):
         # formats the data from the CAN bus and puts it on the frontend
@@ -167,21 +199,56 @@ class MainWindow(QWidget):
         if ic is None:
             print("[WARN] No data received")
             return
-        
+
+        allVoltages = []
         try:
-            for i in range(0, int((bmsValueTransfer.TOTAL_AD68 / 2) + 1)):
+            for i in range(0, int((bmsValueTransfer.TOTAL_AD68 / 2))):
                 ic_dict, cells = ic[i]
 
+                item = None
+
                 if ic_dict.get('type') == 'ic_status':
-                    ic_val = f"{ic_dict['v_segment_V']:.3f}"
-                    self.cellDataArray[i].setItem(0, 0, QTableWidgetItem(ic_val))
+                    ic_val = ic_dict['v_segment_V']
+                    self.cellDataArray[i].setItem(0, 0, QTableWidgetItem(f"{ic_val:.3f}"))
 
                 for col, cell in enumerate(cells, start=1):
+                    # adds data to the table in the front end
                     if cell.get('type') == 'cell':
-                        cell_val = f"{cell['voltage_V']:.3f}"
-                        self.cellDataArray[i].setItem(0, col, QTableWidgetItem(cell_val))
+                        cell_val = cell['voltage_V']
+                        item = QTableWidgetItem(f"{cell_val:.3f}")
+
+                        # changes the colors depending on if balancing or faulting
+                        if cell.get('cell_fault'):
+                            item.setBackground(QBrush(QColor(230, 70, 70)))
+                            item.setForeground(QBrush(QColor(255, 255, 255)))
+                        elif cell.get('is_discharging'):
+                            item.setBackground(QBrush(QColor(255, 235, 130)))
+
+
+                        self.cellDataArray[i].setItem(0, col, item)
+                        allVoltages.append((cell_val, i, col))
 
                 self.cellDataArray[i].viewport().update()
+
+            # calculates the min, max, avg, and delta and displays it in the header portion
+            # the calcualtions should lowkey be done NOT in the frontend but im lazy
+            if allVoltages:
+                max_v, max_ic, max_col = max(allVoltages, key=lambda t: t[0])
+                min_v, min_ic, min_col = min(allVoltages, key=lambda t: t[0])
+                avg_v = sum(v for v, _, _ in allVoltages) / len(allVoltages)
+                delta_v = max_v - min_v
+
+                self.voltageHighOne.setText(f"Highest Cell Volt: {max_v:.3f}")
+                self.voltageLowOne.setText(f"Lowest Cell Volt: {min_v:.3f}")
+                self.voltageAvgOne.setText(f"Avg Cell Volt: {avg_v:.3f}")
+                self.voltageDeltaOne.setText(f"Delta Cell Volt: {delta_v:.3f}")
+
+                self.voltageHighFour.setText(f"Highest Cell Volt: {max_v:.3f}")
+                self.voltageLowFour.setText(f"Lowest Cell Volt: {min_v:.3f}")
+                self.voltageAvgFour.setText(f"Avg Cell Volt: {avg_v:.3f}")
+                self.voltageDeltaFour.setText(f"Delta Cell Volt: {delta_v:.3f}")
+
+
 
         except (IndexError, TypeError, KeyError) as e:
             print(f"[ERROR] onBatteryVoltageReady failed: {e}")
@@ -317,6 +384,7 @@ class MainWindow(QWidget):
         comSelect.addItems(verifyCANDAPTERPresent())
 
         def refreshComPorts():
+            # allows for refreshing if no com detected on startup
             comSelect.clear()
             comSelect.addItems(verifyCANDAPTERPresent())
 
@@ -324,6 +392,7 @@ class MainWindow(QWidget):
 
         baudSelect = QComboBox()
 
+        # defines the baudrates that can be used with a frontend version, backend, and then selects what we use by default
         baudRates = ["125 kBit/sec", "250 kBit/sec", "500 kBit/sec", "1 MBit/sec"]
 
         baudSelect.addItems(baudRates)
@@ -349,6 +418,7 @@ class MainWindow(QWidget):
         lockableWidgets = [comSelect, refreshButton, baudSelect, ad68box, cellsbox]
 
         def setConnectedUI(connected):
+            # creates the connect/disconnect button
             connectButton.setText("Disconnect" if connected else "Connect")
             for w in lockableWidgets:
                 w.setEnabled(not connected)
@@ -356,6 +426,8 @@ class MainWindow(QWidget):
         def connectToCAN():
             self.comPort = comSelect.currentText()
             self.canBaud = items.get(baudSelect.currentText())
+
+            # this is supposed to be a const, no idea why im changing it to the same value but im too scared to break things
             self.SERIALBAUDRATE = 9600
 
             try:
@@ -566,7 +638,7 @@ class MainWindow(QWidget):
 
 
         cellDataGroup = GroupBoxLE("Cell Data")
-        cellDataGroupingLayout = QGridLayout()
+        self.cellDataGroupOne = QGridLayout()
 
 
         sendChargeButton = PushButtonLE("SEND TO BMS")
@@ -629,35 +701,35 @@ class MainWindow(QWidget):
         "DEBUG MASTER MEASUREMENTS"]
 
 
-        resistanceHigh = QLabel(f"Highest Resistance: {None}")
-        resistanceLow = QLabel(f"Lowest Resistance: {None}")
-        resistanceAvg = QLabel(f"Avg Cell Resistance: {None}")
-        resistanceDelta = QLabel(f"Delta Cell Resistance: {None}")
-        cellDataGroupingLayout.addWidget(resistanceHigh, 0, 0)
-        cellDataGroupingLayout.addWidget(resistanceLow, 1, 0)
-        cellDataGroupingLayout.addWidget(resistanceAvg, 2, 0)
-        cellDataGroupingLayout.addWidget(resistanceDelta, 3, 0)
+        self.resistanceHighOne = QLabel(f"Highest Resistance: {None}")
+        self.resistanceLowOne = QLabel(f"Lowest Resistance: {None}")
+        self.resistanceAvgOne = QLabel(f"Avg Cell Resistance: {None}")
+        self.resistanceDeltaOne = QLabel(f"Delta Cell Resistance: {None}")
+        self.cellDataGroupOne.addWidget(self.resistanceHighOne, 0, 0)
+        self.cellDataGroupOne.addWidget(self.resistanceLowOne, 1, 0)
+        self.cellDataGroupOne.addWidget(self.resistanceAvgOne, 2, 0)
+        self.cellDataGroupOne.addWidget(self.resistanceDeltaOne, 3, 0)
 
-        voltageHigh = QLabel(f"Highest Cell Volt: {None}")
-        voltageLow = QLabel(f"Lowest Cell Volt: {None}")
-        voltageAvg = QLabel(f"Avg Cell Volt: {None}")
-        voltageDelta = QLabel(f"Delta Cell Volt: {None}")
-        cellDataGroupingLayout.addWidget(voltageHigh, 0, 1)
-        cellDataGroupingLayout.addWidget(voltageLow, 1, 1)
-        cellDataGroupingLayout.addWidget(voltageAvg, 2, 1)
-        cellDataGroupingLayout.addWidget(voltageDelta, 3, 1)
+        self.voltageHighOne = QLabel(f"Highest Cell Volt: {None}")
+        self.voltageLowOne = QLabel(f"Lowest Cell Volt: {None}")
+        self.voltageAvgOne = QLabel(f"Avg Cell Volt: {None}")
+        self.voltageDeltaOne = QLabel(f"Delta Cell Volt: {None}")
+        self.cellDataGroupOne.addWidget(self.voltageHighOne, 0, 1)
+        self.cellDataGroupOne.addWidget(self.voltageLowOne, 1, 1)
+        self.cellDataGroupOne.addWidget(self.voltageAvgOne, 2, 1)
+        self.cellDataGroupOne.addWidget(self.voltageDeltaOne, 3, 1)
 
-        packSOC = QLabel(f"Pack SOC: {None}")
-        packCurrent = QLabel(f"Pack Current: {None}")
-        packVoltage = QLabel(f"Pack Voltage: {None}")
-        currentLimits = QLabel(f"Current Limits: {None}")
-        cellDataGroupingLayout.addWidget(packSOC, 0, 2)
-        cellDataGroupingLayout.addWidget(packCurrent, 1, 2)
-        cellDataGroupingLayout.addWidget(packVoltage, 2, 2)
-        cellDataGroupingLayout.addWidget(currentLimits, 3, 2)
+        self.packSOCOne = QLabel(f"Pack SOC: {None}")
+        self.packCurrentOne = QLabel(f"Pack Current: {None}")
+        self.packVoltageOne = QLabel(f"Pack Voltage: {None}")
+        self.currentLimitsOne = QLabel(f"Current Limits: {None}")
+        self.cellDataGroupOne.addWidget(self.packSOCOne, 0, 2)
+        self.cellDataGroupOne.addWidget(self.packCurrentOne, 1, 2)
+        self.cellDataGroupOne.addWidget(self.packVoltageOne, 2, 2)
+        self.cellDataGroupOne.addWidget(self.currentLimitsOne, 3, 2)
 
 
-        cellDataGroup.setLayout(cellDataGroupingLayout)
+        cellDataGroup.setLayout(self.cellDataGroupOne)
         self.tabOneLayout.addWidget(cellDataGroup, 0, 0, 1, 3)
 
 
@@ -758,9 +830,9 @@ class MainWindow(QWidget):
         self.tabTwoLayout.addWidget(sendMessagebutton, 0, 4)
 
 
-        self.genericCANTable.setColumnCount(13)
+        self.genericCANTable.setColumnCount(12)
 
-        self.genericCANTable.setRowCount(2)
+        self.genericCANTable.setRowCount(0)
 
         self.genericCANTable.setHorizontalHeaderLabels([
             "ID",
@@ -829,50 +901,37 @@ class MainWindow(QWidget):
 
         grouping = GroupBoxLE("Live Cell Data")
 
-        groupingLayout = QGridLayout()
+        self.cellDataGroupFour = QGridLayout()
 
-        resistanceHigh = QLabel(f"Highest Resistance: {None}")
-        resistanceLow = QLabel(f"Lowest Resistance: {None}")
-        resistanceAvg = QLabel(f"Avg Cell Resistance: {None}")
-        resistanceDelta = QLabel(f"Delta Cell Resistance: {None}")
-        groupingLayout.addWidget(resistanceHigh, 0, 0)
-        groupingLayout.addWidget(resistanceLow, 1, 0)
-        groupingLayout.addWidget(resistanceAvg, 2, 0)
-        groupingLayout.addWidget(resistanceDelta, 3, 0)
+        self.resistanceHighFour = QLabel(f"Highest Resistance: {None}")
+        self.resistanceLowFour = QLabel(f"Lowest Resistance: {None}")
+        self.resistanceAvgFour = QLabel(f"Avg Cell Resistance: {None}")
+        self.resistanceDeltaFour = QLabel(f"Delta Cell Resistance: {None}")
+        self.cellDataGroupFour.addWidget(self.resistanceHighFour, 0, 0)
+        self.cellDataGroupFour.addWidget(self.resistanceLowFour, 1, 0)
+        self.cellDataGroupFour.addWidget(self.resistanceAvgFour, 2, 0)
+        self.cellDataGroupFour.addWidget(self.resistanceDeltaFour, 3, 0)
 
-        voltageHigh = QLabel(f"Highest Cell Volt: {None}")
-        voltageLow = QLabel(f"Lowest Cell Volt: {None}")
-        voltageAvg = QLabel(f"Avg Cell Volt: {None}")
-        voltageDelta = QLabel(f"Delta Cell Volt: {None}")
-        groupingLayout.addWidget(voltageHigh, 0, 1)
-        groupingLayout.addWidget(voltageLow, 1, 1)
-        groupingLayout.addWidget(voltageAvg, 2, 1)
-        groupingLayout.addWidget(voltageDelta, 3, 1)
+        self.voltageHighFour = QLabel(f"Highest Cell Volt: {None}")
+        self.voltageLowFour = QLabel(f"Lowest Cell Volt: {None}")
+        self.voltageAvgFour = QLabel(f"Avg Cell Volt: {None}")
+        self.voltageDeltaFour = QLabel(f"Delta Cell Volt: {None}")
+        self.cellDataGroupFour.addWidget(self.voltageHighFour, 0, 1)
+        self.cellDataGroupFour.addWidget(self.voltageLowFour, 1, 1)
+        self.cellDataGroupFour.addWidget(self.voltageAvgFour, 2, 1)
+        self.cellDataGroupFour.addWidget(self.voltageDeltaFour, 3, 1)
 
-        packSOC = QLabel(f"Pack SOC: {None}")
-        packCurrent = QLabel(f"Pack Current: {None}")
-        packVoltage = QLabel(f"Pack Voltage: {None}")
-        currentLimits = QLabel(f"Current Limits: {None}")
-        groupingLayout.addWidget(packSOC, 0, 2)
-        groupingLayout.addWidget(packCurrent, 1, 2)
-        groupingLayout.addWidget(packVoltage, 2, 2)
-        groupingLayout.addWidget(currentLimits, 3, 2)
-
-        # liveCellRadio = QRadioButton("Live Cell Voltages")
-        # openCellRadio = QRadioButton("Open Cell Voltages")
-        
-        # self.typeOfDataGroup = QButtonGroup()
-
-        # self.typeOfDataGroup.addButton(liveCellRadio)
-        # self.typeOfDataGroup.addButton(openCellRadio)
-
-        # groupingLayout.addWidget(liveCellRadio, 0, 3)
-        # groupingLayout.addWidget(openCellRadio, 1, 3)
-
-        # liveCellRadio.setChecked(True)
+        self.packSOCFour = QLabel(f"Pack SOC: {None}")
+        self.packCurrentFour = QLabel(f"Pack Current: {None}")
+        self.packVoltageFour = QLabel(f"Pack Voltage: {None}")
+        self.currentLimitsFour = QLabel(f"Current Limits: {None}")
+        self.cellDataGroupFour.addWidget(self.packSOCFour, 0, 2)
+        self.cellDataGroupFour.addWidget(self.packCurrentFour, 1, 2)
+        self.cellDataGroupFour.addWidget(self.packVoltageFour, 2, 2)
+        self.cellDataGroupFour.addWidget(self.currentLimitsFour, 3, 2)
 
 
-        grouping.setLayout(groupingLayout)
+        grouping.setLayout(self.cellDataGroupFour)
 
         grouping.setMaximumHeight(150)
 
@@ -1030,6 +1089,7 @@ if __name__ == "__main__":
 
     app.setStyle('Fusion')
 
+    pyi_splash = None
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 
         try:
@@ -1037,7 +1097,7 @@ if __name__ == "__main__":
             pyi_splash.update_text(birthdays.returnBirthdays() + "\nLoading...")
             
         except ImportError:
-            pass  # Not running from a PyInstaller bundle
+            pyi_splash = None  # Not running from a PyInstaller bundle
         
         #print('running in a PyInstaller bundle')
         stylesheet = loadFile(sys._MEIPASS + "/styles.qss")
@@ -1051,6 +1111,7 @@ if __name__ == "__main__":
     
     window.showMaximized()
 
-    pyi_splash.close()
+    if pyi_splash:
+        pyi_splash.close()
 
     sys.exit(app.exec())
